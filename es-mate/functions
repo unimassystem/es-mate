@@ -1,0 +1,276 @@
+#! /bin/sh
+sshUser='root'
+perName=''
+declare -a gHosts
+declare -a g_nodes
+declare -a name
+
+function writeServiceConf(){
+	Host=$1
+	head_size=$2
+	echo 'set.default.ES_HEAP_SIZE='$head_size > .temp/elasticsearch.conf.$Host
+	cat elasticsearch.conf.template >> .temp/elasticsearch.conf.$Host
+}
+
+
+function writeServiceConf2(){
+        Host=$1
+        head_size=$2
+        echo 'ES_HEAP_SIZE='$head_size'm' > .temp/elasticsearch.conf.$Host
+        cat elasticsearch.conf.template >> .temp/elasticsearch.conf.$Host
+}
+
+
+function writeYmlConf(){
+	Id=$2
+	Type=$3
+	yml_cluster_name='cluster.name: '$1
+	yml_path_data='path.data: '$4
+	yml_path_log='path.logs: '$5
+	yml_transport_tcp_port='transport.tcp.port: '$6
+	yml_http_port='http.port: '$7
+	yml_node_tag='node.tag: '$8	
+	yml_node_name='node.name: '$Id'[${HOSTNAME}]'
+	if [ $Type == '0' ]
+	then
+		yml_node_master='node.master: false'
+		yml_node_data='node.data: false'
+
+	elif [ $Type == '1' ]
+	then
+		yml_node_master='node.master: false'
+		yml_node_data='node.data: true'
+	elif [ $Type == '2' ]
+	then
+		yml_node_master='node.master: true'
+		yml_node_data='node.data: false'
+	elif [ $Type == '3' ]
+	then
+		yml_node_master='node.master: true'
+		yml_node_data='node.data: true'
+	fi
+
+	discovery_hosts=''
+	for i in ${g_nodes[@]}
+	do
+	    discovery_hosts=${discovery_hosts}'"'$i'"'','
+	done
+	discovery_hosts=${discovery_hosts:0:${#discovery_hosts}-1}
+	yml_discovery_zen_ping_unicast_hosts='discovery.zen.ping.unicast.hosts: ['$discovery_hosts']'
+	master_num=${#g_nodes[@]}
+	MinimumMaster=$[$master_num/2 + 1]
+	discovery_zen_minimum_master_nodes='discovery.zen.minimum_master_nodes: '$MinimumMaster
+        cat elasticsearch.yml.template > .temp/elasticsearch.yml.$Id
+	echo $yml_node_tag >> .temp/elasticsearch.yml.$Id
+        echo $yml_node_name >> .temp/elasticsearch.yml.$Id
+        echo $yml_cluster_name >> .temp/elasticsearch.yml.$Id
+        echo $yml_node_master >> .temp/elasticsearch.yml.$Id
+        echo $yml_node_data >> .temp/elasticsearch.yml.$Id
+        echo $yml_path_data >> .temp/elasticsearch.yml.$Id
+        echo $yml_path_log >> .temp/elasticsearch.yml.$Id
+        echo $yml_transport_tcp_port >> .temp/elasticsearch.yml.$Id
+        echo $yml_http_port >> .temp/elasticsearch.yml.$Id
+        echo $yml_discovery_zen_ping_unicast_hosts >> .temp/elasticsearch.yml.$Id
+        echo $discovery_zen_minimum_master_nodes >> .temp/elasticsearch.yml.$Id
+}
+
+
+function setupNode(){
+	clusterName=$1
+	val=$2
+	parms=(${val//;/ })
+	Id=${parms[0]}
+	Host=${parms[1]}
+	Type=${parms[2]}
+	Home=${parms[3]}
+	Heap=${parms[4]}
+	TransPort=${parms[5]}
+	HttpPort=${parms[6]}
+	DatePaths=${parms[7]}
+	LogPath=${parms[8]}
+	MinimumMaster=${parms[9]}
+	#echo $Host $Type $Home $Heap $TransPort $HttpPort $DatePath $LogPath $DiscoveryHosts
+	writeServiceConf2 $Id $Heap
+	writeYmlConf $clusterName $Id $Type $DatePaths $LogPath $TransPort $HttpPort $MinimumMaster
+}
+
+
+function loadConfigure(){
+	i=0
+	while read line
+	do
+        	if [ ${#line} -eq 0 ]
+        	then
+                	continue
+        	fi
+       		if [ ${line:0:1} == "#" ]
+        	then
+                	continue
+        	fi
+        	name[$i]="$line"
+        	let i++
+	done < $1
+
+	getHosts
+
+
+	master_num=${#g_nodes[@]}
+
+	if [ $[$master_num%2] -eq 0 ]
+	then
+        	echo "Size of master nodes must an even number, current:[$master_num]"
+        	exit
+	fi
+	
+	if [ -f .temp/cluster ]
+	then
+        	perName=`cat .temp/cluster`
+	fi
+}
+
+
+function listNodes(){
+	if [ ! -z $perName ]
+        then
+                echo 'Current install cluster name: '$perName
+        fi
+        for v in ${name[@]}
+        do
+                echo $v
+        done
+        echo ''
+}
+
+
+function checkClusterName(){
+	clusterName=$1
+        if [ -z $perName ]
+        then
+		return
+	fi
+
+	if [ $perName != $clusterName ]
+	then
+        	echo -n '已经安装的集群名:['$perName']输入集群名不一致,是否继续?(Y/n)'
+        	read tmp
+        	echo ''
+        	if [ ! -n "$tmp" ] || [ $tmp != 'Y' ]
+        	then
+                	exit
+        	else
+                	echo '集群名已修改,重启集群生效:'"[$perName]:[$clusterName]"
+        	fi
+	fi
+}
+
+function doInstall(){
+        v=$1
+        parms=(${v//;/ })
+        echo 'Installing... ' ${parms[0]} ':' ${parms[1]}
+        sshExec $sshUser ${parms[1]} "rm -fr ${parms[3]} >& /dev/null"
+        sshExec $sshUser ${parms[1]} "mkdir -p ${parms[3]}"
+        scpFile $sshUser ${parms[1]} udb-package.tar.bz2 ${parms[3]}
+        sshExec $sshUser ${parms[1]} "tar jxvf ${parms[3]}/udb-package.tar.bz2 -C ${parms[3]}"
+        scpFile $sshUser ${parms[1]} .temp/elasticsearch.conf.${parms[0]} ${parms[3]}/elasticsearch/bin/service/elasticsearch.conf
+        scpFile $sshUser ${parms[1]} .temp/elasticsearch.yml.${parms[0]} ${parms[3]}/elasticsearch/config/elasticsearch.yml
+        echo ""
+}
+
+function doConfigure(){
+        v=$1
+        parms=(${v//;/ })
+        echo 'Configure... ' ${parms[0]}
+        scpFile $sshUser ${parms[1]} .temp/elasticsearch.conf.${parms[0]} ${parms[3]}/elasticsearch/bin/service/elasticsearch.conf
+        scpFile $sshUser ${parms[1]} .temp/elasticsearch.yml.${parms[0]} ${parms[3]}/elasticsearch/config/elasticsearch.yml
+        echo ""
+}
+
+
+function doAllNodes(){
+	fun=$1
+        for v in ${name[@]}
+        do
+        	$fun $v
+        done
+}
+
+function doNode(){
+	fun=$1
+        Id=$2
+        for v in ${name[@]}
+        do
+                parms=(${v//;/ })
+                if [ $Id == ${parms[0]} ]
+                then
+                        $fun $v
+                        return
+                fi
+        done
+        echo '['$Id'] Is not in configure file!'
+}
+
+
+function doListNodes(){
+	fun=$1
+        hosts=$2
+        inodes=(${hosts//,/ })
+        for v in ${inodes[@]}
+        do
+        	doNode $fun $v
+        done
+}
+
+
+function addToHosts(){
+	if [ $3 -eq 2 ] || [ $3 -eq 3 ]
+	then
+		g_nodes=("${g_nodes[@]}" "$1:$2")
+	fi
+        for v in ${gHosts[@]}
+        do
+		if [ $v == $1 ]
+		then
+			return
+		fi
+        done
+	gHosts=("${gHosts[@]}" "$1")
+}
+
+function getHosts(){
+	for v in ${name[@]}
+	do
+		parms=(${v//;/ })
+		addToHosts ${parms[1]} ${parms[5]} ${parms[2]}
+	done
+}
+
+
+
+function scpFile(){
+	user=$1
+	host=$2
+	src=$3
+	dst=$4
+	scp $src $user@$host:$dst
+}
+
+function sshExec(){
+	user=$1
+        host=$2
+        cmd=$3
+        ssh $user@$host $cmd
+
+
+}
+
+
+function createConf(){
+	cName=$1
+	rm -fr .temp >& /dev/null
+	mkdir .temp
+	for v in ${name[@]}
+	do
+        	setupNode $cName $v
+	done
+}
+

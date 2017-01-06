@@ -1,0 +1,32 @@
+#! /bin/bash
+. functions
+
+conf='nodes'
+loadConfigure $conf
+
+
+function doNode(){
+	scpHost=$1
+	srcFile=$2
+	dstFile=$3
+	echo $scpHost $srcFile $dstFile
+	scpFile $sshUser $scpHost $srcFile $dstFile
+}
+
+
+
+function doAll(){
+        for v in ${gHosts[@]}
+        do
+		doNode $v $1 $2
+        done
+}
+
+if [ $# -eq 0 ]
+then
+	echo 'Usage: ./doScp srcFile dstFile'
+	echo ''
+	exit
+fi
+
+doAll $1 $2

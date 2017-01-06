@@ -1,0 +1,30 @@
+#! /bin/bash
+. functions
+
+conf='nodes'
+loadConfigure $conf
+
+
+function doNode(){
+	echo $1 $2
+	sshExec $sshUser $1 "$2"
+}
+
+
+
+function doAll(){
+        for v in ${gHosts[@]}
+        do
+		doNode $v "$1"
+        done
+}
+
+if [ $# -ne 1 ]
+then
+	echo 'Usage: ./doScp cmd'
+	echo ''
+	exit
+fi
+
+doAll "$1"
+

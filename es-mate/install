@@ -1,0 +1,31 @@
+#! /bin/bash
+. functions
+conf='nodes'
+loadConfigure $conf
+
+if [ $# -lt 1 ]
+then
+        echo "Usage: $0 cluster_name <IDS(node-1,node-2)>"
+        listNodes
+        exit
+fi
+
+clusterName=$1
+
+checkClusterName $clusterName
+
+createConf $clusterName
+
+echo $clusterName > .temp/cluster
+
+echo -n 'Press any Key to Continue'
+read tmp
+
+if [ $# -eq 1 ]
+then
+	doAllNodes doInstall
+else
+	doListNodes doInstall $2
+fi
+
+

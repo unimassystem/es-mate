@@ -1,0 +1,26 @@
+#! /bin/bash
+. functions
+
+drop_cmd='echo 3 > /proc/sys/vm/drop_caches'
+restore_cmd='echo 0 > /proc/sys/vm/drop_caches'
+
+function doDrop(){
+	echo 'Cleaning...' $1
+	sshExec $sshUser $1 "$drop_cmd"
+	sleep 1
+	sshExec $sshUser $1 "$restore_cmd"
+}
+conf='nodes'
+loadConfigure $conf
+
+if [ $# -eq 1 ]
+then
+	doDrop $1
+	return
+fi
+
+for v in ${gHosts[@]}
+do
+	doDrop $v
+done
+

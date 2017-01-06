@@ -1,0 +1,71 @@
+#! /bin/bash
+. functions
+
+conf='nodes'
+loadConfigure $conf
+
+
+function execCmd(){
+        host=$1
+        cmd=$3
+        home=$2
+	echo $host $cmd
+       	sshExec $sshUser $host "$home/elasticsearch/bin/service/elasticsearch64 $cmd" 
+}
+
+
+
+function doAll(){
+        clusterCmd=$1
+        for v in ${name[@]}
+        do
+                parms=(${v//;/ })
+                execCmd ${parms[1]} ${parms[3]} $clusterCmd
+        done
+}
+
+function execNode(){
+        for v in ${name[@]}
+        do
+                parms=(${v//;/ })
+                if [ $1 == ${parms[0]} ]
+                then
+                        execCmd ${parms[1]} ${parms[3]} $2
+                       	return
+                fi
+        done
+        echo '['$host'] Is not in configure file!'
+}
+
+
+function doOther(){
+	hosts=$1
+	nodes=(${hosts//,/ })
+	for v in ${nodes[@]}
+	do
+		execNode $v $2
+	done
+		
+
+}
+
+
+if [ $# -eq 1 ]
+then
+	doAll $1
+elif [ $# -eq 2 ]
+then
+	doOther $2 $1
+else
+	echo 'Usage ./cluster [ start | stop | restart | status ] <Ids(1,2)>'
+	echo ''
+	for v in ${name[@]}
+	do
+        	echo $v
+	done
+	echo ""
+        exit
+fi
+
+
+
