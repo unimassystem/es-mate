@@ -1,0 +1,28 @@
+一、系统参数调整
+1.max_map_count
+修改/etc/sysctl.conf (docs/sysctl.conf)
+vm.max_map_count = 262144
+
+2.limits 
+修改/etc/security/limits.conf (docs/limits.conf)
+
+unimas		soft	nproc		8192
+unimas          hard    nproc           8192
+unimas          soft    nofile          655350
+unimas          hard    nofile          655350
+unimas          soft    nofile          655350
+unimas          hard    nofile          655350
+unimas		soft	memlock		unlimited
+unimas		hard	memlock		unlimited
+unimas          soft    as         unlimited
+unimas          hard    as         unlimited
+
+3.拷贝文件至节点
+./doScp docs/limits.conf /etc/security/limits.conf 
+./doScp docs/sysctl.conf /etc/sysctl.conf
+
+4.生效sysctl
+./doSsh 'sysctl -p'
+
+
+

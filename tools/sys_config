@@ -1,0 +1,31 @@
+#! /bin/bash
+es_user=$1
+
+cp /etc/sysctl.conf /etc/sysctl.conf_bk
+cp /etc/security/limits.conf /etc/security/limits.conf_bk
+
+sed /vm.max_map_count/d /etc/sysctl.conf > sysctl.conf.tmp
+echo "vm.max_map_count = 262144" >> sysctl.conf.tmp
+mv sysctl.conf.tmp /etc/sysctl.conf
+
+sed /$es_user/d /etc/security/limits.conf > limits.conf.tmp
+
+echo "unimas		soft	nproc		8192" >> limits.conf.tmp
+echo "unimas          hard    nproc           8192" >> limits.conf.tmp
+echo "unimas          soft    nofile          1024000" >> limits.conf.tmp
+echo "unimas          hard    nofile          1024000" >> limits.conf.tmp
+echo "unimas		soft	memlock		unlimited" >> limits.conf.tmp
+echo "unimas		hard	memlock		unlimited" >> limits.conf.tmp
+echo "unimas          soft    as         unlimited" >> limits.conf.tmp
+echo "unimas          hard    as         unlimited" >> limits.conf.tmp
+
+mv limits.conf.tmp /etc/security/limits.conf
+
+restorecon /etc/security/limits.conf 
+
+sysctl -p
+
+useradd $es_user >& /dev/null
+
+su $es_user -c "ulimit -a"
+

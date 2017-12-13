@@ -1,0 +1,31 @@
+#! /bin/sh
+
+host=$1
+
+val=`curl $host/_cat/count 2> /dev/null`
+parms=(${val// / })
+stime=${parms[0]}
+scount=${parms[2]}
+
+total_count=0
+total_took=0
+while : 1
+do
+	val=`curl $host/_cat/count 2> /dev/null`
+	parms=(${val// / })
+	ptime=${parms[0]} 
+	pcount=${parms[2]}
+	sleep 30
+	val=`curl $host/_cat/count 2> /dev/null`
+	parms=(${val// / })
+	ctime=${parms[0]} 
+	ccount=${parms[2]}
+	took=$(($ctime-$ptime))
+	count=$(($ccount-$pcount))
+        
+	total_count=$(($ccount-$scount))
+        total_took=$(($ctime-$stime))
+
+	echo "speed0: $(($count/$took))  speed1: $(($total_count/$total_took))"
+done
+

@@ -1,0 +1,20 @@
+#! /bin/sh
+if [ $# -lt 1 ]
+then
+	echo "Usage: $0 [ none | all | primaries | new_primaries | status] <host(default:127.0.0.1:9200)>"
+	echo ''
+	exit
+fi
+host="127.0.0.1:9200"
+if [ $# -eq 2 ]
+then
+	host=$2	
+fi
+
+if [ $1 == 'status' ]
+then
+	curl -XGET 'http://'$host'/_cluster/settings?pretty'
+else
+	curl -XPUT 'http://'$host'/_cluster/settings' -d '{"persistent":{"cluster.routing.allocation.enable":"'$1'"}}'
+fi
+

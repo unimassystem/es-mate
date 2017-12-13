@@ -1,13 +1,13 @@
 #! /bin/bash
 . functions
-
+suUser=$sshUser
 conf='nodes'
 loadConfigure $conf
 
 
 function doNode(){
-	echo $1 $2
-	sshExec $sshUser $1 "$2"
+	echo $1 $2 $suUser
+	sshExec $sshUser $1 "su $suUser -c \"$2\""
 }
 
 
@@ -19,11 +19,16 @@ function doAll(){
         done
 }
 
-if [ $# -ne 1 ]
+if [ $# -lt 1 ]
 then
-	echo 'Usage: ./doScp cmd'
+	echo 'Usage: ./doScp cmd <user>'
 	echo ''
 	exit
+fi
+
+if [ $# -eq 2 ]
+then
+	suUser=$2
 fi
 
 doAll "$1"

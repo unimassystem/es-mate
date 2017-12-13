@@ -1,0 +1,4 @@
+#! /bin/bash
+. resources
+./doScp tools/sys_config /tmp/.unimas_system_config
+./doSsh "/tmp/.unimas_system_config $es_user"

@@ -1,23 +1,36 @@
 #! /bin/sh
-sshUser='root'
+. resources
+sshUser=$install_user
 perName=''
+cName=''
 declare -a gHosts
-declare -a g_nodes
+declare -a gMNodes
 declare -a name
+pDiscovery=''
+pQueryMaxMemory=0
 
-function writeServiceConf(){
-	Host=$1
-	head_size=$2
-	echo 'set.default.ES_HEAP_SIZE='$head_size > .temp/elasticsearch.conf.$Host
-	cat elasticsearch.conf.template >> .temp/elasticsearch.conf.$Host
+function scpFile(){
+        user=$1
+        host=$2
+        src=$3
+        dst=$4
+        scp $src $user@$host:$dst
+}
+
+function sshExec(){
+        user=$1
+        host=$2
+        cmd=$3
+        ssh $user@$host $cmd
 }
 
 
-function writeServiceConf2(){
-        Host=$1
-        head_size=$2
-        echo 'ES_HEAP_SIZE='$head_size'm' > .temp/elasticsearch.conf.$Host
-        cat elasticsearch.conf.template >> .temp/elasticsearch.conf.$Host
+function writeServiceConf(){
+	Host=$1
+	heap_size=$2
+	cat $es_jvm_option > .temp/$es_jvm_option.$Host
+	echo '-Xms'$heap_size >> .temp/$es_jvm_option.$Host
+	echo '-Xmx'$heap_size >> .temp/$es_jvm_option.$Host
 }
 
 
@@ -29,7 +42,7 @@ function writeYmlConf(){
 	yml_path_log='path.logs: '$5
 	yml_transport_tcp_port='transport.tcp.port: '$6
 	yml_http_port='http.port: '$7
-	yml_node_tag='node.tag: '$8	
+	yml_node_tag='node.attr.rack: '$8	
 	yml_node_name='node.name: '$Id'[${HOSTNAME}]'
 	if [ $Type == '0' ]
 	then
@@ -51,27 +64,27 @@ function writeYmlConf(){
 	fi
 
 	discovery_hosts=''
-	for i in ${g_nodes[@]}
+	for i in ${gMNodes[@]}
 	do
 	    discovery_hosts=${discovery_hosts}'"'$i'"'','
 	done
 	discovery_hosts=${discovery_hosts:0:${#discovery_hosts}-1}
 	yml_discovery_zen_ping_unicast_hosts='discovery.zen.ping.unicast.hosts: ['$discovery_hosts']'
-	master_num=${#g_nodes[@]}
+	master_num=${#gMNodes[@]}
 	MinimumMaster=$[$master_num/2 + 1]
 	discovery_zen_minimum_master_nodes='discovery.zen.minimum_master_nodes: '$MinimumMaster
-        cat elasticsearch.yml.template > .temp/elasticsearch.yml.$Id
-	echo $yml_node_tag >> .temp/elasticsearch.yml.$Id
-        echo $yml_node_name >> .temp/elasticsearch.yml.$Id
-        echo $yml_cluster_name >> .temp/elasticsearch.yml.$Id
-        echo $yml_node_master >> .temp/elasticsearch.yml.$Id
-        echo $yml_node_data >> .temp/elasticsearch.yml.$Id
-        echo $yml_path_data >> .temp/elasticsearch.yml.$Id
-        echo $yml_path_log >> .temp/elasticsearch.yml.$Id
-        echo $yml_transport_tcp_port >> .temp/elasticsearch.yml.$Id
+        cat $es_config_yml > .temp/$es_config_yml.$Id
+	echo $yml_node_tag >> .temp/$es_config_yml.$Id
+        echo $yml_node_name >> .temp/$es_config_yml.$Id
+        echo $yml_cluster_name >> .temp/$es_config_yml.$Id
+        echo $yml_node_master >> .temp/$es_config_yml.$Id
+        echo $yml_node_data >> .temp/$es_config_yml.$Id
+        echo $yml_path_data >> .temp/$es_config_yml.$Id
+        echo $yml_path_log >> .temp/$es_config_yml.$Id
+        echo $yml_transport_tcp_port >> .temp/$es_config_yml.$Id
         echo $yml_http_port >> .temp/elasticsearch.yml.$Id
-        echo $yml_discovery_zen_ping_unicast_hosts >> .temp/elasticsearch.yml.$Id
-        echo $discovery_zen_minimum_master_nodes >> .temp/elasticsearch.yml.$Id
+        echo $yml_discovery_zen_ping_unicast_hosts >> .temp/$es_config_yml.$Id
+        echo $discovery_zen_minimum_master_nodes >> .temp/$es_config_yml.$Id
 }
 
 
@@ -88,10 +101,10 @@ function setupNode(){
 	HttpPort=${parms[6]}
 	DatePaths=${parms[7]}
 	LogPath=${parms[8]}
-	MinimumMaster=${parms[9]}
+	nodeFlag=${parms[9]}
 	#echo $Host $Type $Home $Heap $TransPort $HttpPort $DatePath $LogPath $DiscoveryHosts
-	writeServiceConf2 $Id $Heap
-	writeYmlConf $clusterName $Id $Type $DatePaths $LogPath $TransPort $HttpPort $MinimumMaster
+	writeServiceConf $Id $Heap"g"
+	writeYmlConf $clusterName $Id $Type $DatePaths $LogPath $TransPort $HttpPort $nodeFlag
 }
 
 
@@ -114,7 +127,7 @@ function loadConfigure(){
 	getHosts
 
 
-	master_num=${#g_nodes[@]}
+	master_num=${#gMNodes[@]}
 
 	if [ $[$master_num%2] -eq 0 ]
 	then
@@ -163,26 +176,109 @@ function checkClusterName(){
 	fi
 }
 
+
+function installPackage(){
+	_host=$1
+	_package=$2
+	_path=$3
+	scpFile $sshUser $_host packages/$_package $_path
+	sshExec $sshUser $_host "tar zxvf $_path/$_package -C $_path"
+	sshExec $sshUser $_host "rm -fr $_path/$_package"
+}
+
+
+function installPlugin(){
+        _host=$1
+	_plugin=$2
+        _path=$3
+	_parms=(${_plugin//:/ })
+	_name=${_parms[0]}
+	_package=${_parms[1]}
+        scpFile $sshUser $_host packages/$_package $_path
+        sshExec $sshUser $_host "mkdir $_path/$es_prefix/plugins/$_name;cd $_path/$es_prefix/plugins/$_name; unzip $_path/$_package"
+        sshExec $sshUser $_host "rm -fr $_path/$_package"
+}
+
+
+function installPlugins(){
+	_host=$1
+	_path=$2
+	_plugins=(${es_plugins//,/ })
+        for e in ${_plugins[@]}
+        do
+                installPlugin $_host $e $_path
+        done
+}
+
+
+function doInitiation(){
+	v=$1
+        parms=(${v//;/ })
+        echo 'Installing... ' ${parms[0]} ':' ${parms[1]}
+	data_path=${parms[7]}
+	log_path=${parms[8]}
+	
+	_path=(${data_path//,/ })
+
+	sshExec $sshUser ${parms[1]} "useradd $es_user"
+        for e in ${_path[@]}
+        do
+		sshExec $sshUser ${parms[1]} "mkdir -p  $e"
+		sshExec $sshUser ${parms[1]} "chown -R $es_user:$es_user $e"
+        done
+	sshExec $sshUser ${parms[1]} "mkdir -p  $log_path"
+        sshExec $sshUser ${parms[1]} "chown -R $es_user:$es_user $log_path"
+	
+	sshExec $sshUser ${parms[1]} "chmod -R o+r  ${parms[3]}/$es_prefix"
+
+	sshExec $sshUser ${parms[1]} "mkdir -p  ${parms[3]}/$es_prefix/config/scripts"
+	sshExec $sshUser ${parms[1]} "chown -R  $es_user:$es_user ${parms[3]}/$es_prefix/config/scripts"
+	
+	sshExec $sshUser ${parms[1]} "mkdir -p  ${parms[3]}/run"
+        sshExec $sshUser ${parms[1]} "chown -R  $es_user:$es_user ${parms[3]}/run"
+
+        sshExec $sshUser ${parms[1]} "mkdir -p  ${parms[14]}"
+        sshExec $sshUser ${parms[1]} "chown -R  $es_user:$es_user ${parms[14]}"
+
+}
+
+
 function doInstall(){
         v=$1
         parms=(${v//;/ })
         echo 'Installing... ' ${parms[0]} ':' ${parms[1]}
         sshExec $sshUser ${parms[1]} "rm -fr ${parms[3]} >& /dev/null"
         sshExec $sshUser ${parms[1]} "mkdir -p ${parms[3]}"
-        scpFile $sshUser ${parms[1]} udb-package.tar.bz2 ${parms[3]}
-        sshExec $sshUser ${parms[1]} "tar jxvf ${parms[3]}/udb-package.tar.bz2 -C ${parms[3]}"
-        scpFile $sshUser ${parms[1]} .temp/elasticsearch.conf.${parms[0]} ${parms[3]}/elasticsearch/bin/service/elasticsearch.conf
-        scpFile $sshUser ${parms[1]} .temp/elasticsearch.yml.${parms[0]} ${parms[3]}/elasticsearch/config/elasticsearch.yml
+	installPackage ${parms[1]} $jdk ${parms[3]}
+	installPackage ${parms[1]} $es_core ${parms[3]}
+	installPlugins ${parms[1]} ${parms[3]}
+
+        if [ ${#parms[@]} -gt 10 ] && [ "${parms[10]}" == "1" ]
+        then
+                doPrestoInstall $v
+        fi
+
+	doConfigure $v
+
+	doInitiation $v
         echo ""
+	
 }
+
 
 function doConfigure(){
         v=$1
         parms=(${v//;/ })
         echo 'Configure... ' ${parms[0]}
-        scpFile $sshUser ${parms[1]} .temp/elasticsearch.conf.${parms[0]} ${parms[3]}/elasticsearch/bin/service/elasticsearch.conf
-        scpFile $sshUser ${parms[1]} .temp/elasticsearch.yml.${parms[0]} ${parms[3]}/elasticsearch/config/elasticsearch.yml
+        scpFile $sshUser ${parms[1]} .temp/$es_jvm_option.${parms[0]} ${parms[3]}/$es_prefix/config/$es_jvm_option
+        scpFile $sshUser ${parms[1]} .temp/$es_config_yml.${parms[0]} ${parms[3]}/$es_prefix/config/$es_config_yml
         echo ""
+
+        if [ ${#parms[@]} -gt 10 ] && [ "${parms[10]}" == "1" ]
+        then
+                doPrestoConfig $v
+        fi
+
 }
 
 
@@ -224,7 +320,7 @@ function doListNodes(){
 function addToHosts(){
 	if [ $3 -eq 2 ] || [ $3 -eq 3 ]
 	then
-		g_nodes=("${g_nodes[@]}" "$1:$2")
+		gMNodes=("${gMNodes[@]}" "$1:$2")
 	fi
         for v in ${gHosts[@]}
         do
@@ -241,28 +337,17 @@ function getHosts(){
 	do
 		parms=(${v//;/ })
 		addToHosts ${parms[1]} ${parms[5]} ${parms[2]}
+		
+		if [ ${#parms[@]} -gt 10 ] && [ "${parms[10]}" == "1" ]
+		then
+			if [ "${parms[15]}" == "1" ]
+			then
+				pDiscovery="${parms[1]}:${parms[13]}"
+			fi
+			pQueryMaxMemory=$[$pQueryMaxMemory+${parms[12]}]
+		fi
 	done
 }
-
-
-
-function scpFile(){
-	user=$1
-	host=$2
-	src=$3
-	dst=$4
-	scp $src $user@$host:$dst
-}
-
-function sshExec(){
-	user=$1
-        host=$2
-        cmd=$3
-        ssh $user@$host $cmd
-
-
-}
-
 
 function createConf(){
 	cName=$1
@@ -273,4 +358,152 @@ function createConf(){
         	setupNode $cName $v
 	done
 }
+
+
+function doPrestoInstall(){
+	echo "Presto installing..."
+        v=$1
+        parms=(${v//;/ })
+	installPackage ${parms[1]} $presto_core ${parms[3]}
+	deployPrestoCmd $1
+	installPrestoPlugins ${parms[1]} ${parms[3]}/$presto_prefix
+}
+
+
+
+
+
+
+function doPrestoConfig(){
+	echo "Presto config..."
+        v=$1
+        parms=(${v//;/ })
+        id=${parms[0]}
+        pHeap=${parms[11]}
+        pQMemory=${parms[12]}
+        pPort=${parms[13]}
+        pVar=${parms[14]}
+	uuid=$(getPrestoUuid $id)
+
+	esConfigPath=${parms[3]}/$es_prefix/config/$es_config_yml
+	
+        echo "coordinator=true" > .temp/config.properties.$id
+        echo "node-scheduler.include-coordinator=true" >> .temp/config.properties.$id
+        echo "http-server.http.port=$pPort" >> .temp/config.properties.$id
+        echo "query.max-memory=$pQueryMaxMemory"GB"" >> .temp/config.properties.$id
+        echo "query.max-memory-per-node=$pQMemory"GB"" >> .temp/config.properties.$id
+        echo "discovery-server.enabled=true" >> .temp/config.properties.$id
+        echo "discovery.uri="http://"$pDiscovery" >> .temp/config.properties.$id
+
+
+        echo "-server"  > .temp/jvm.config.$id
+        echo "-Xmx$pHeap"G"" >> .temp/jvm.config.$id
+	echo "-Xms$pHeap"G"" >> .temp/jvm.config.$id
+        echo "-XX:+UseG1GC" >> .temp/jvm.config.$id
+        echo "-XX:G1HeapRegionSize=32M" >> .temp/jvm.config.$id
+        echo "-XX:+UseGCOverheadLimit" >> .temp/jvm.config.$id
+        echo "-XX:+ExplicitGCInvokesConcurrent" >> .temp/jvm.config.$id
+        echo "-XX:+HeapDumpOnOutOfMemoryError" >> .temp/jvm.config.$id
+        echo "-XX:+ExitOnOutOfMemoryError" >> .temp/jvm.config.$id
+
+        echo "node.environment=$cName" > .temp/node.properties.$id
+        echo "node.id=$uuid" >> .temp/node.properties.$id
+        echo "node.data-dir=$pVar" >> .temp/node.properties.$id
+
+	echo "connector.name=es" > .temp/es.properties.$id
+	echo "es.bulk.size=4096" >> .temp/es.properties.$id
+	echo "es.memory.lock=false" >> .temp/es.properties.$id
+	echo "es.config.resource=$esConfigPath" >> .temp/es.properties.$id
+
+	echo "com.facebook.presto=WARN" >> .temp/log.properties.$id
+
+	deployPrestoConfig $1
+
+}
+
+function deployPrestoConfig(){
+	v=$1
+        parms=(${v//;/ })
+	configPath=${parms[3]}/$presto_prefix/etc
+	echo $configPath
+	sshExec $sshUser ${parms[1]} "mkdir -p $configPath/catalog"
+	scpFile $sshUser ${parms[1]} .temp/config.properties.${parms[0]} $configPath/config.properties
+	scpFile $sshUser ${parms[1]} .temp/jvm.config.${parms[0]} $configPath/jvm.config
+        scpFile $sshUser ${parms[1]} .temp/node.properties.${parms[0]} $configPath/node.properties
+	scpFile $sshUser ${parms[1]} .temp/log.properties.${parms[0]} $configPath/log.properties
+	scpFile $sshUser ${parms[1]} .temp/es.properties.${parms[0]} $configPath/catalog/es.properties
+
+}
+
+
+
+function getPrestoUuid(){
+	if [ ! -d ".uuid" ]
+	then
+		mkdir .uuid
+	fi
+	
+	if [ ! -f ".uuid/uuid.$1" ]
+	then
+		uuid=$(cat /proc/sys/kernel/random/uuid)
+		echo $uuid > .uuid/uuid.$1
+	fi
+	echo $(cat .uuid/uuid.$1)
+}
+
+
+function deployPrestoCmd(){
+	v=$1
+        parms=(${v//;/ })
+
+	echo '#! /bin/sh' > .temp/service.${parms[0]}
+	echo "export JAVA_HOME=${parms[3]}/$java_home" >> .temp/service.${parms[0]}
+	echo 'export PATH=$JAVA_HOME/bin:$PATH' >> .temp/service.${parms[0]}
+	echo 'exec "$(dirname "$0")/launcher" "$@"' >> .temp/service.${parms[0]}
+
+
+	echo '#! /bin/sh' > .temp/presto.${parms[0]}
+        echo "export JAVA_HOME=${parms[3]}/$java_home" >> .temp/presto.${parms[0]}
+        echo 'export PATH=$JAVA_HOME/bin:$PATH' >> .temp/presto.${parms[0]}
+        echo 'exec "$(dirname "$0")/presto-cli.jar" "$@"' >> .temp/presto.${parms[0]}
+
+	binPath=${parms[3]}/$presto_prefix/bin
+
+	chmod +x .temp/service.${parms[0]}
+
+	chmod +x .temp/presto.${parms[0]}
+
+	scpFile $sshUser ${parms[1]} .temp/service.${parms[0]} $binPath/service
+
+	scpFile $sshUser ${parms[1]} .temp/presto.${parms[0]} $binPath/presto
+
+	scpFile $sshUser ${parms[1]} packages/$presto_cli $binPath/presto-cli.jar
+
+}
+
+
+
+function installPrestoPlugin(){
+        _host=$1
+        _plugin=$2
+        _path=$3
+        _parms=(${_plugin//:/ })
+        _name=${_parms[0]}
+        _package=${_parms[1]}
+        scpFile $sshUser $_host packages/$_package $_path/plugin
+        sshExec $sshUser $_host "mkdir -p $_path/plugin/$_name; tar zxvf $_path/plugin/$_package -C $_path/plugin/$_name"
+        sshExec $sshUser $_host "rm -fr $_path/plugin/$_package"
+}
+
+
+function installPrestoPlugins(){
+        _host=$1
+        _path=$2
+        _plugins=(${presto_plugins//,/ })
+        for e in ${_plugins[@]}
+        do
+                installPrestoPlugin $_host $e $_path
+        done
+}
+
 

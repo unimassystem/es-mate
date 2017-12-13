@@ -1,16 +1,100 @@
 #! /bin/bash
 . functions
+. resources
 
 conf='nodes'
 loadConfigure $conf
 
+function getPid(){
+	rm -fr .pid
+        sshExec $sshUser $1 "cat $2/run/elasticsearch.pid"  1> .pid 2> /dev/null
+        pid=`cat .pid`
+	echo $pid
+
+}
+
+
+function startService(){
+	v=$1
+	parms=(${v//;/ })
+	ES_HOME=${parms[3]}
+	
+
+	sshExec $sshUser ${parms[1]} "echo never > /sys/kernel/mm/redhat_transparent_hugepage/enabled;echo never > /sys/kernel/mm/redhat_transparent_hugepage/defrag"
+
+        if [ ${#parms[@]} -gt 10 ] && [ "${parms[10]}" == "1" ]
+        then
+                echo "Starting presto on: ${parms[1]} ..."
+                cmd="su $es_user $ES_HOME/$presto_prefix/bin/service start"
+                sshExec $sshUser ${parms[1]} "$cmd"
+        fi
+
+
+	pid=$(getPid ${parms[1]} $ES_HOME)
+
+	if [ ! -z $pid ]
+	then
+		echo "Process already exists on ${parms[1]}, pid: $pid"
+		return
+	fi
+
+	echo "Starting elasticsearch on: ${parms[1]} ..."
+	cmd="export JAVA_HOME=$ES_HOME/$java_home;export PATH=\$JAVA_HOME/bin:\$PATH;export CLASSPATH=.:\$JAVA_HOME/lib/dt.jar:\$JAVA_HOME/lib/tools.jar;su $es_user -c \"$ES_HOME/$es_prefix/bin/elasticsearch -d -p $ES_HOME/run/elasticsearch.pid \""
+	
+	sshExec $sshUser ${parms[1]} "$cmd"
+	echo -n "Elasticsearch started pid: "
+	sshExec $sshUser ${parms[1]} "cat $ES_HOME/run/elasticsearch.pid"
+	echo ""
+	echo ""
+	echo ""
+
+}
+
+
+function stopService(){
+        v=$1
+        parms=(${v//;/ })
+	ES_HOME=${parms[3]}
+
+	if [ ${#parms[@]} -gt 10 ] && [ "${parms[10]}" == "1" ]
+        then
+                echo -n "Stopping presto on: ${parms[1]} "
+                cmd="su $es_user $ES_HOME/$presto_prefix/bin/service stop"
+                sshExec $sshUser ${parms[1]} "$cmd"
+        fi
+
+
+        pid=$(getPid ${parms[1]} $ES_HOME)
+
+        if [ -z $pid ]
+        then
+                echo "Process not found on ${parms[1]}"
+                return
+        fi
+
+	echo -n "Stopping elasticsearch on: ${parms[1]} pid: "
+	sshExec $sshUser ${parms[1]} "cat $ES_HOME/run/elasticsearch.pid"
+	echo ""
+	cmd="kill -9 \`cat $ES_HOME/run/elasticsearch.pid\`"
+        sshExec $sshUser ${parms[1]} "$cmd"
+	sshExec $sshUser ${parms[1]} "rm -fr $ES_HOME/run/elasticsearch.pid"
+	echo "Elasticsearch stopped."
+	echo ""
+	echo ""
+}
+
+
 
 function execCmd(){
-        host=$1
-        cmd=$3
-        home=$2
-	echo $host $cmd
-       	sshExec $sshUser $host "$home/elasticsearch/bin/service/elasticsearch64 $cmd" 
+	cmd=$2
+	if [ $cmd == 'start' ]
+	then
+		startService $1
+	elif [ $cmd == 'stop' ]
+	then
+		stopService $1
+	fi
+
 }
 
 
@@ -19,10 +103,10 @@ function doAll(){
         clusterCmd=$1
         for v in ${name[@]}
         do
-                parms=(${v//;/ })
-                execCmd ${parms[1]} ${parms[3]} $clusterCmd
+		execCmd $v $clusterCmd
         done
 }
+
 
 function execNode(){
         for v in ${name[@]}
@@ -30,7 +114,7 @@ function execNode(){
                 parms=(${v//;/ })
                 if [ $1 == ${parms[0]} ]
                 then
-                        execCmd ${parms[1]} ${parms[3]} $2
+                        execCmd $v $2
                        	return
                 fi
         done
@@ -57,7 +141,7 @@ elif [ $# -eq 2 ]
 then
 	doOther $2 $1
 else
-	echo 'Usage ./cluster [ start | stop | restart | status ] <Ids(1,2)>'
+	echo 'Usage ./cluster [ start | stop ] <Ids(1,2)>'
 	echo ''
 	for v in ${name[@]}
 	do
